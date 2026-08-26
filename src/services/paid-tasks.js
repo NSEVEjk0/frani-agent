@@ -52,6 +52,25 @@ function noteSend(rateLimit) {
   rateLimit.record('action');
 }
 
+/**
+ * Classify what `client.refund` actually did. It resolves rather than throws for
+ * every failure mode it has — `{skipped:'refunds disabled'}`, `{skipped:'min-balance
+ * floor'}`, `{error}`, `{unconfirmed:true}`, `{dryRun:true}` — so a caller that
+ * ignores the return will happily tell someone their money is on the way when it
+ * never left. Never claim a refund happened without checking this.
+ *
+ * `unconfirmed` is its own case on purpose: the burn may already have certified, so
+ * it must never be retried, and it must never be reported as either done or failed.
+ */
+function refundOutcome(result) {
+  if (!result) return { ok: false, why: 'no result from the send' };
+  if (result.unconfirmed) return { ok: false, unconfirmed: true, why: 'certification unconfirmed' };
+  if (result.error) return { ok: false, why: String(result.error) };
+  if (result.skipped) return { ok: false, why: String(result.skipped) };
+  if (result.dryRun) return { ok: true, dryRun: true };
+  return { ok: true };
+}
+
 async function replyFree(client, dm, rateLimit, body) {
   if (!underCaps(rateLimit)) {
     log.warn(`Rate cap reached — dropping free reply to ${recipientOf(dm)}.`);
@@ -224,11 +243,22 @@ export async function settlePayment(client, { transfer, state, rateLimit }) {
   // Underpaid → refund everything, invite a retry.
   if (amountBase < priceBase) {
     log.warn(`Underpaid ${task.kind} from ${recipient}: ${client.toWhole(amountBase)} < ${client.toWhole(priceBase)} ${sym()}. Refunding.`);
-    await client.refund(sender, amountBase, `frani refund — insufficient for ${task.kind}`);
+    const out = refundOutcome(await client.refund(sender, amountBase, `frani refund — insufficient for ${task.kind}`));
     noteSend(rateLimit);
+    const shortfall = `That was ${client.toWhole(amountBase)} ${sym()}, but \`${task.kind}\` costs ${config.paidTasks.priceWhole} ${sym()}.`;
+    if (!out.ok) {
+      // Do NOT claim a refund that did not happen. Say what is true, say what is
+      // owed, and leave a loud trail — this needs a human to settle by hand.
+      log.error(`Refund of ${client.toWhole(amountBase)} ${sym()} to ${recipient} did NOT go out (${out.why}). Owed and unpaid.`);
+      await client.sendDM(
+        recipient,
+        `${shortfall} I could not send your ${client.toWhole(amountBase)} ${sym()} back just now${out.unconfirmed ? ' — the return may or may not have gone through, so I will not resend it and risk paying twice' : ` (${out.why})`}. It is recorded as owed to you and ${config.brand} will settle it. — ${config.brand}`,
+      );
+      return;
+    }
     await client.sendDM(
       recipient,
-      `That was ${client.toWhole(amountBase)} ${sym()}, but \`${task.kind}\` costs ${config.paidTasks.priceWhole} ${sym()}. I've refunded it — send the full amount to retry. — ${config.brand}`,
+      `${shortfall} I've refunded it — send the full amount to retry. — ${config.brand}`,
     );
     return;
   }
@@ -239,8 +269,16 @@ export async function settlePayment(client, { transfer, state, rateLimit }) {
     resultBody = task.kind === 'notarize' ? fulfillNotarize(client, task) : await fulfillDigest(client, task);
   } catch (err) {
     log.error(`Fulfilment of ${task.kind} failed: ${err?.message ?? err}. Refunding.`);
-    await client.refund(sender, amountBase, `frani refund — ${task.kind} fulfilment failed`);
+    const out = refundOutcome(await client.refund(sender, amountBase, `frani refund — ${task.kind} fulfilment failed`));
     noteSend(rateLimit);
+    if (!out.ok) {
+      log.error(`Refund of ${client.toWhole(amountBase)} ${sym()} to ${recipient} did NOT go out (${out.why}). Owed and unpaid.`);
+      await client.sendDM(
+        recipient,
+        `Sorry — I hit an error fulfilling your \`${task.kind}\`, and I could not return your ${client.toWhole(amountBase)} ${sym()} either${out.unconfirmed ? ' — the return may or may not have gone through, so I will not resend it and risk paying twice' : ` (${out.why})`}. It is recorded as owed to you and ${config.brand} will settle it. — ${config.brand}`,
+      );
+      return;
+    }
     await client.sendDM(
       recipient,
       `Sorry — I hit an error fulfilling your \`${task.kind}\` and have refunded ${client.toWhole(amountBase)} ${sym()}. Please try again. — ${config.brand}`,
@@ -256,7 +294,24 @@ export async function settlePayment(client, { transfer, state, rateLimit }) {
   // Refund any overpayment (the one autonomous outbound payment we allow).
   const over = amountBase - priceBase;
   if (over > 0n) {
-    await client.refund(sender, over, `frani overpayment refund`);
+    const out = refundOutcome(await client.refund(sender, over, `frani overpayment refund`));
+    // Say so either way. Unannounced, a correct refund is an unexplained transfer
+    // arriving minutes after the result; unannounced, a *failed* one is silent theft
+    // of the difference. `help` and `about` both promise overpayment comes back, so
+    // the promise has to be closed out loud.
+    if (out.ok) {
+      log.info(`Refunded ${client.toWhole(over)} ${sym()} overpayment to ${recipient}.`);
+      await client.sendDM(
+        recipient,
+        `You sent ${client.toWhole(over)} ${sym()} more than \`${task.kind}\` costs — that's on its way back to you now. — ${config.brand}`,
+      );
+    } else {
+      log.error(`Overpayment refund of ${client.toWhole(over)} ${sym()} to ${recipient} did NOT go out (${out.why}). Owed and unpaid.`);
+      await client.sendDM(
+        recipient,
+        `You sent ${client.toWhole(over)} ${sym()} more than \`${task.kind}\` costs. I could not return the difference just now${out.unconfirmed ? ' — it may or may not have gone through, so I will not resend it and risk paying twice' : ` (${out.why})`}. It is recorded as owed to you and ${config.brand} will settle it. — ${config.brand}`,
+      );
+    }
   }
   state.save();
 }
