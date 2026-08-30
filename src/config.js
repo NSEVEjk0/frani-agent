@@ -89,17 +89,24 @@ const config = Object.freeze({
     feedPollMs: int('FEED_POLL_MS', 60_000),
     searchPollMs: int('SEARCH_POLL_MS', 90_000),
     receivePollMs: int('RECEIVE_POLL_MS', 45_000),
+    // Standing watches re-run on their own cadence, slower than the concierge:
+    // a watch is a want that lasts days, so a couple of minutes of latency on an
+    // alert costs nobody anything and keeps the market-api read load polite.
+    watchPollMs: int('WATCH_POLL_MS', 120_000),
+    // Sweep for top-up requests nobody ever answered. This is the backstop for
+    // the payment_request:updated event, not a substitute: the event is the fast
+    // path, the sweep guarantees a lapsed request eventually gets its ending.
+    billSweepMs: int('BILL_SWEEP_MS', 900_000),
   }),
 
   // ── Economic safety rails ────────────────────────────────────────────────
   safety: Object.freeze({
     dryRun: bool('DRY_RUN', false),
-    // Whole-UCT floor the agent will never spend below.
+    // Whole-UCT mark below which the one-time bootstrap self-mint is allowed to
+    // fire. This agent has no outbound payment rail, so nothing else consults it.
     minBalanceWhole: num('MIN_BALANCE', 1),
     selfMintEnabled: bool('SELF_MINT_ENABLED', true),
     selfMintAmountWhole: num('SELF_MINT_AMOUNT', 100),
-    // Earn-only policy: the ONLY autonomous outbound payment is refunding overpayment.
-    autoRefundOverpayment: bool('AUTO_REFUND_OVERPAYMENT', true),
     // Politeness / anti-spam limits.
     matchMinScore: num('MATCH_MIN_SCORE', 0.72),
     maxDmsPerHour: int('MAX_DMS_PER_HOUR', 20),
@@ -129,12 +136,32 @@ const config = Object.freeze({
     shortlistSize: int('CONCIERGE_SHORTLIST_SIZE', 3),
   }),
 
-  // ── Paid tasks module ────────────────────────────────────────────────────
-  paidTasks: Object.freeze({
-    enabled: bool('PAID_TASKS_ENABLED', true),
-    // Price per paid task (notarize / digest). NOTARIZE_FEE_UCT is the documented name;
-    // TASK_PRICE is kept as a legacy alias.
-    priceWhole: num('NOTARIZE_FEE_UCT', num('TASK_PRICE', 5)),
+  // ── Standing watches (the metered half of discovery) ─────────────────────
+  // A watch is a standing want. The agent re-runs it and DMs an alert the first
+  // time a new intent matches. Alerts are metered, not sold as a lump: every
+  // account gets a free allowance, and after that alerts are drawn against
+  // prepaid credit that the account tops up by paying a payment request. Credit
+  // is denominated in UCT base units and an alert costs a fixed price, so a
+  // top-up that does not divide evenly leaves a carry rather than an overpayment
+  // to hand back. Nothing here ever sends UCT.
+  watch: Object.freeze({
+    enabled: bool('WATCH_ENABLED', true),
+    // Standing watches one account may hold at once.
+    maxPerAccount: int('WATCH_MAX_PER_ACCOUNT', 3),
+    // Alerts an account gets before it is ever asked for anything.
+    freeAlerts: int('WATCH_FREE_ALERTS', 3),
+    // Price of one delivered alert.
+    alertPriceWhole: num('WATCH_ALERT_PRICE', 0.5),
+    // Alerts in the top-up the agent asks for when the allowance runs out.
+    packAlerts: int('WATCH_PACK_ALERTS', 10),
+    // How long an unanswered top-up request stays open before the watch pauses.
+    billTtlHours: int('WATCH_BILL_TTL_HOURS', 48),
+    // Alerts one account can receive from a single sweep (anti-flood).
+    maxAlertsPerPass: int('WATCH_MAX_ALERTS_PER_PASS', 3),
+    // Matches held for an account while its top-up is unanswered.
+    maxQueuedPerWatch: int('WATCH_MAX_QUEUED', 10),
+    // A standing want is not forever; a watch lapses if it is never renewed.
+    expiresInDays: int('WATCH_EXPIRES_DAYS', 14),
   }),
 
   logLevel: str('LOG_LEVEL', 'info'),

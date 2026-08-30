@@ -10,8 +10,10 @@
  *      (via semantic search, which returns pubkeys/handles — unlike the feed),
  *      find matching supply for each, and DM the buyer a ranked shortlist.
  *
- * The search helper here is reused by the free `find` and paid `digest` DM
- * commands, so ranking/formatting/self-exclusion live in one place.
+ * The search helper here is the single ranking path in the agent: the push side
+ * above, the free `find` DM, and every standing-watch pass in `watchlist.js` all
+ * go through it, so relevance, de-duplication and self-exclusion are decided in
+ * exactly one place and a watch can never surface something `find` would not.
  */
 
 import config from '../config.js';

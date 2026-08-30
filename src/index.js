@@ -10,6 +10,10 @@
  *   node src/index.js --whoami   print identity + balance, then exit
  *   node src/index.js --doctor   connectivity / config self-check, then exit
  *   node src/index.js --mint     capped self-mint, then exit
+ *   node src/index.js --demo     narrated offline walk-through, then exit
+ *
+ * `--demo` is the only mode that does not open a wallet or a socket, so it is the
+ * only one that is safe to run while the daemon is up.
  */
 
 import config from './config.js';
@@ -37,6 +41,14 @@ async function reportStatus(client) {
 async function main() {
   const args = new Set(process.argv.slice(2));
   banner();
+
+  // Before the boot, deliberately: the demo runs the real service modules over a
+  // fake network, so it must not open a second Sphere connection on this wallet.
+  if (args.has('--demo')) {
+    const { runDemo } = await import('./demo.js');
+    await runDemo({ pace: args.has('--fast') ? 0 : 900 });
+    process.exit(0);
+  }
 
   const client = await SphereClient.boot();
 

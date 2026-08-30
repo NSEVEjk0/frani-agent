@@ -1,7 +1,7 @@
 {
   "name": "frani-agent",
   "version": "1.0.0",
-  "description": "frani-agent — an autonomous Market Concierge + paid-task service agent for the Unicity testnet2 network, built on the official @unicitylabs/sphere-sdk. Owner/creator: Itachi. Made by CRYPTFRANI.",
+  "description": "frani-agent \u2014 an autonomous market-discovery agent for the Unicity testnet2 network: standing semantic watches on the market feed, alerted as new supply appears and metered against prepaid credit. Request-only money: it has no outbound payment rail at all. Owner/creator: Itachi. Made by CRYPTFRANI.",
   "type": "module",
   "main": "src/index.js",
   "engines": {
@@ -10,17 +10,21 @@
   "scripts": {
     "start": "node src/index.js",
     "whoami": "node src/index.js --whoami",
-    "mint": "node src/index.js --mint",
     "doctor": "node src/index.js --doctor",
-    "test": "node test-balance-outage-unit.mjs && node test-refund-truth-unit.mjs"
+    "mint": "node src/index.js --mint",
+    "demo": "node src/index.js --demo",
+    "test": "node test-watch-ledger-unit.mjs && node test-mint-gate-unit.mjs"
   },
   "keywords": [
     "unicity",
     "testnet2",
     "sphere-sdk",
     "autonomous-agent",
-    "intents",
-    "market",
+    "market-discovery",
+    "semantic-search",
+    "standing-watch",
+    "non-custodial",
+    "payment-requests",
     "uct",
     "cryptfrani"
   ],

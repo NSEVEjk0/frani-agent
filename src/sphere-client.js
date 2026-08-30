@@ -9,10 +9,19 @@
  *     and the required wallet-api transport layer
  *   • load-or-create identity from a locally-persisted BIP39 mnemonic
  *   • registers the @nametag, resolves the UCT coin, checks balance
- *   • exposes GUARDED money actions (mint / refund / payment-request)
+ *   • exposes the two money actions this agent has: the one-time bootstrap mint,
+ *     and raising a payment REQUEST
  *
- * Money policy = EARN-ONLY: the only autonomous outbound payment is a refund
- * of an overpayment. Every spending path honours DRY_RUN and a min-balance floor.
+ * Money policy = REQUEST-ONLY. Read the method list: there is no send. Not a
+ * disabled send, not a send behind a flag — no `payments.send` call exists in
+ * this file, so no bug, no compromised config and no confused state machine can
+ * make this agent pay anybody. It asks, and the counterparty's own wallet
+ * decides. That is the whole reason the product upstream can meter alerts
+ * without ever holding, escrowing or returning somebody's UCT.
+ *
+ * The consequence to keep in mind while editing: nothing here can settle a debt.
+ * If a caller ever finds itself owing UCT, the bug is in the caller's design,
+ * not in a missing rail here.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -260,9 +269,11 @@ export class SphereClient {
    * `payments.assets()` resolves with an EMPTY ARRAY when the wallet-api cannot
    * be reached — it does not throw. So "no row for our coin" is two different
    * facts wearing the same clothes: a wallet that genuinely holds nothing, and a
-   * backend that never answered. Every caller that gates money has to tell them
-   * apart, because treating silence as zero means refusing a refund we can
-   * afford, or re-minting on a wallet that is already funded.
+   * backend that never answered. This agent has exactly one decision gated on
+   * the balance — whether to fire the one-time bootstrap self-mint — and getting
+   * that wrong in the "silence read as zero" direction mints a second time onto
+   * a wallet that is already funded. Hence {present, row} rather than a number:
+   * bootstrapMintIfNeeded() has to be able to see the difference.
    */
   async _coinRow() {
     const assets = await this.sphere.payments.assets(this.coin.coinId);
@@ -368,64 +379,17 @@ export class SphereClient {
     await this.mint(config.safety.selfMintAmountWhole);
   }
 
-  // ── outbound payment (earn-only: refunds only) ──────────────────────────────
+  // ── inbound-only money: no send path exists ─────────────────────────────────
   /**
-   * Low-level guarded send. Refuses to cross the min-balance floor and honours
-   * DRY_RUN. Used only for refunds under the earn-only policy.
+   * Deliberately absent: `_send` / `refund` / any `payments.send` wrapper.
+   *
+   * An earlier version of this agent sold paid tasks and therefore needed to
+   * hand money back when someone overpaid. Metered alerts replaced that: credit
+   * is held in base units and an odd amount just carries to the next alert, so
+   * there is nothing to return and no rail to return it on. If you are about to
+   * add one, check first whether the feature that needs it is really this
+   * agent's job — a sibling in the fleet already holds custody on purpose.
    */
-  async _send(recipient, base, memo) {
-    if (base <= 0n) return { skipped: 'non-positive amount' };
-    if (config.safety.dryRun) {
-      log.warn(`[DRY_RUN] Would send ${this.toWhole(base)} ${this.coin.symbol} to ${recipient}.`);
-      return { dryRun: true };
-    }
-    const { present, row } = await this._coinRow();
-    if (!present) {
-      // Fail closed, but say why truthfully. Blaming the floor here would be a
-      // lie about our own balance: we do not know it. The caller reports this as
-      // "could not return it — still owed to you", which stays correct either way.
-      log.warn(
-        `Refusing send of ${this.toWhole(base)} — balance unavailable ` +
-          `(wallet-api gave no asset row); not guessing at the min-balance floor.`,
-      );
-      return { skipped: 'balance unavailable — could not confirm the min-balance floor' };
-    }
-    const balance = BigInt(row.confirmedAmount ?? row.totalAmount ?? '0');
-    const floor = this.toBase(config.safety.minBalanceWhole);
-    if (balance - base < floor) {
-      log.warn(
-        `Refusing send of ${this.toWhole(base)} — would breach min-balance floor ` +
-          `(${this.toWhole(balance)} → below ${config.safety.minBalanceWhole}).`,
-      );
-      return { skipped: 'min-balance floor' };
-    }
-    try {
-      const result = await this.sphere.payments.send({
-        recipient,
-        amount: base.toString(),
-        coinId: this.coin.coinId,
-        memo,
-      });
-      if (result?.error) log.error(`Send error: ${result.error}`);
-      else log.info(`Sent ${this.toWhole(base)} ${this.coin.symbol} to ${recipient} (${result.status}).`);
-      return result;
-    } catch (err) {
-      // Never blindly re-send on an unconfirmed certification (double-pay risk).
-      if (isSphereError(err) && err.code === 'CERTIFICATION_UNCONFIRMED') {
-        log.warn(`Send certification unconfirmed to ${recipient} — NOT retrying (double-pay guard).`);
-        return { unconfirmed: true };
-      }
-      log.error(`Send failed to ${recipient}: ${fmtErr(err)}`);
-      return { error: fmtErr(err) };
-    }
-  }
-
-  /** Refund an overpayment (the one autonomous outbound payment we allow). */
-  async refund(recipient, base, memo = 'frani-agent refund') {
-    if (!config.safety.autoRefundOverpayment) return { skipped: 'refunds disabled' };
-    log.info(`Refunding ${this.toWhole(base)} ${this.coin.symbol} to ${recipient}.`);
-    return this._send(recipient, base, memo);
-  }
 
   // ── payment requests (how the agent earns) ──────────────────────────────────
   async requestPayment(recipient, whole, memo) {
@@ -444,6 +408,22 @@ export class SphereClient {
       return result;
     } catch (err) {
       log.error(`Payment request failed to ${recipient}: ${fmtErr(err)}`);
+      return { success: false, error: fmtErr(err) };
+    }
+  }
+
+  /**
+   * Decline a payment request somebody sent US. This agent never pays: an
+   * inbound request is answered rather than ignored so the sender's wallet stops
+   * showing it as pending on our account.
+   */
+  async declinePaymentRequest(id) {
+    try {
+      const res = await this.sphere.payments.requests.decline(id);
+      log.info(`Declined inbound payment request ${String(id).slice(0, 10)}… (this agent does not pay).`);
+      return res;
+    } catch (err) {
+      log.warn(`Could not decline payment request ${String(id).slice(0, 10)}…: ${fmtErr(err)}`);
       return { success: false, error: fmtErr(err) };
     }
   }
