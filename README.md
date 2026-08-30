@@ -2,6 +2,12 @@
 
 **An autonomous Market Concierge + paid-task service agent for the [Unicity](https://unicity.network) testnet2 network.**
 
+**Track:** Autonomous agents — discovery and paid services
+**Agentic:** Yes — it finds work, prices it, delivers it and refunds overpayment with no human in the loop
+**Runs on AstridOS:** No — a Node.js daemon under `systemd` on Linux
+**Status:** Live on testnet2 as `@frani-agent`, holding 100 UCT. Verified end-to-end on-network, including the awkward path: a deliberate 4 UCT underpayment against a 5 UCT task was detected, explained with the real price, and refunded in full — reported as done only because it really went out.
+**SDK:** `@unicitylabs/sphere-sdk` ^0.15.0 (`state-transition-sdk` 3.x)
+
 Built on the official [`@unicitylabs/sphere-sdk`](https://www.npmjs.com/package/@unicitylabs/sphere-sdk). `frani-agent` claims the nametag **`@frani-agent`**, lives on the network continuously as a background daemon, and takes economic actions on its own — no human clicking required.
 
 > **Owner / Creator:** Itachi &nbsp;·&nbsp; **Made by CRYPTFRANI**
@@ -150,9 +156,35 @@ frani-agent/
 
 ---
 
+## Tests
+
+```bash
+npm test
+```
+
+`test-refund-truth-unit.mjs` — 45 offline assertions, 21 of which fail without the fix, and
+no network, wallet or funds. It pins the rule that the agent **never claims a refund that
+did not go out**: `client.refund` resolves rather than throws for every failure mode it has
+(refunds disabled, min-balance floor, send error, unconfirmed certification), so a caller
+that ignores the return tells someone their money is on the way when it never left. An
+unconfirmed certification is its own third answer — reported as neither done nor failed,
+and never retried, because the burn may already have certified.
+
+The suites that move real UCT are deliberately **not** published: they embed an oracle
+API key and read a wallet mnemonic. `.gitignore` keeps `test-*.mjs` ignored by default and
+negates only the offline one, so a new live test stays private unless someone opts it in.
+
+---
+
 ## Disclaimer
 
 Runs on **testnet2** with test-only UCT. Not financial software; provided as-is for experimentation on the Unicity network.
+
+---
+
+## License
+
+MIT © Itachi (CRYPTFRANI) — see [LICENSE](LICENSE).
 
 ---
 
