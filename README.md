@@ -162,7 +162,7 @@ frani-agent/
 npm test
 ```
 
-Two offline suites, 62 assertions, no network, wallet or funds:
+Two offline suites, 64 assertions, no network, wallet or funds:
 
 `test-refund-truth-unit.mjs` — 45 assertions, 21 of which fail without the fix. It pins the
 rule that the agent **never claims a refund that did not go out**: `client.refund` resolves
@@ -172,13 +172,16 @@ money is on the way when it never left. An unconfirmed certification is its own 
 answer — reported as neither done nor failed, and never retried, because the burn may
 already have certified.
 
-`test-balance-outage-unit.mjs` — 17 assertions, 5 of which fail without the fix. It pins the
+`test-balance-outage-unit.mjs` — 19 assertions, 6 of which fail without the fix. It pins the
 rule that a wallet-api outage is **never read as a zero balance**. `payments.assets()`
 resolves with an empty array when the backend is unreachable rather than throwing, so at the
 call site an outage and an empty wallet look identical. Two things went wrong on that: a
 withheld refund blamed the min-balance floor when the wallet in fact held 100 UCT, and the
 one-time bootstrap would have fired a *second* self-mint onto an already-funded wallet. The
-send still fails closed — it just says why truthfully now.
+send still fails closed — it just says why truthfully now. The mint refusal is scoped to a
+*pre-existing* wallet: one generated on this very boot cannot already hold funds, so there
+the silence really is a zero and a brand-new identity still performs its documented
+one-time self-mint.
 
 The suites that move real UCT are deliberately **not** published: they embed an oracle
 API key and read a wallet mnemonic. `.gitignore` keeps `test-*.mjs` ignored by default and
