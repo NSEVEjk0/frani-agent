@@ -12,7 +12,7 @@
     "whoami": "node src/index.js --whoami",
     "mint": "node src/index.js --mint",
     "doctor": "node src/index.js --doctor",
-    "test": "node test-refund-truth-unit.mjs"
+    "test": "node test-balance-outage-unit.mjs && node test-refund-truth-unit.mjs"
   },
   "keywords": [
     "unicity",
